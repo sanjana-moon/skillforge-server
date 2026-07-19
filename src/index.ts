@@ -127,7 +127,11 @@ interface MentorSession {
 }
 
 interface AuthenticatedRequest extends Request {
-    user?: JWTPayload & { email?: string };
+    user?: JWTPayload & {
+        email?: string;
+        name?: string;
+        image?: string;
+    };
 }
 
 // ============================
@@ -730,33 +734,60 @@ async function run() {
 
                 const studentEmail = req.user!.email as string;
 
+                // Get user from database
+                const user = await usersCollection.findOne({
+                    email: studentEmail,
+                });
+
+                if (!user) {
+                    res.status(404).send({
+                        message: "User not found",
+                    });
+                    return;
+                }
+
+                // Check if already enrolled
                 const existing = await enrollmentCollection.findOne({
                     courseId,
                     studentEmail,
                 });
 
                 if (existing) {
-                    res.status(200).send({ message: "Already enrolled" });
+                    res.status(200).send({
+                        message: "Already enrolled",
+                    });
                     return;
                 }
 
+                // Create enrollment
                 const result = await enrollmentCollection.insertOne({
                     courseId,
                     courseTitle,
                     studentEmail,
+                    studentName: user.name,
                     progress: 0,
                     createdAt: new Date(),
                 });
 
+                // Increase enrollment count
                 await courseCollection.updateOne(
                     { _id: new ObjectId(courseId) },
-                    { $inc: { enrollmentCount: 1 } }
+                    {
+                        $inc: {
+                            enrollmentCount: 1,
+                        },
+                    }
                 );
 
-                res.send({ success: true, enrollment: result });
+                res.send({
+                    success: true,
+                    enrollment: result,
+                });
             } catch (error) {
                 console.error(error);
-                res.status(500).send({ message: "Failed to enroll in course" });
+                res.status(500).send({
+                    message: "Failed to enroll in course",
+                });
             }
         }
     );
@@ -876,6 +907,19 @@ async function run() {
 
                 const studentEmail = req.user!.email as string;
 
+                // Get user from database
+                const user = await usersCollection.findOne({
+                    email: studentEmail,
+                });
+
+                if (!user) {
+                    res.status(404).send({
+                        success: false,
+                        message: "User not found",
+                    });
+                    return;
+                }
+
                 // Check if course exists and is approved/published
                 const course = await courseCollection.findOne({
                     _id: new ObjectId(courseId),
@@ -884,9 +928,9 @@ async function run() {
                 });
 
                 if (!course) {
-                    res.status(404).send({ 
+                    res.status(404).send({
                         success: false,
-                        message: "Course not found or not available" 
+                        message: "Course not found or not available",
                     });
                     return;
                 }
@@ -898,19 +942,22 @@ async function run() {
                 });
 
                 if (existingEnrollment) {
-                    res.status(200).send({ 
+                    res.status(200).send({
                         success: true,
-                        message: "Already enrolled" 
+                        message: "Already enrolled",
                     });
                     return;
                 }
 
                 // Check if payment already processed
-                const existingPayment = await paymentCollection.findOne({ transactionId });
+                const existingPayment = await paymentCollection.findOne({
+                    transactionId,
+                });
+
                 if (existingPayment) {
-                    res.status(200).send({ 
+                    res.status(200).send({
                         success: true,
-                        message: "Payment already processed" 
+                        message: "Payment already processed",
                     });
                     return;
                 }
@@ -920,7 +967,7 @@ async function run() {
                     courseId,
                     courseTitle: course.title,
                     studentEmail,
-                    studentName: req.user?.name || "",
+                    studentName: user.name,
                     progress: 0,
                     createdAt: new Date(),
                 });
@@ -928,13 +975,17 @@ async function run() {
                 // Update course enrollment count
                 await courseCollection.updateOne(
                     { _id: new ObjectId(courseId) },
-                    { $inc: { enrollmentCount: 1 } }
+                    {
+                        $inc: {
+                            enrollmentCount: 1,
+                        },
+                    }
                 );
 
                 // Create payment record
                 await paymentCollection.insertOne({
                     studentEmail,
-                    studentName: req.user?.name || "",
+                    studentName: user.name,
                     courseId,
                     courseTitle: course.title,
                     amount: course.price,
@@ -943,16 +994,16 @@ async function run() {
                     paidAt: new Date(),
                 });
 
-                res.send({ 
-                    success: true, 
+                res.send({
+                    success: true,
                     enrollment: enrollmentResult,
-                    message: "Enrollment created successfully"
+                    message: "Enrollment created successfully",
                 });
             } catch (error) {
                 console.error("Checkout error:", error);
-                res.status(500).send({ 
+                res.status(500).send({
                     success: false,
-                    message: "Checkout failed" 
+                    message: "Checkout failed",
                 });
             }
         }
