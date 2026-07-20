@@ -18,6 +18,9 @@ dotenv.config();
 const app = express();
 const port = Number(process.env.PORT) || 5000;
 
+const ai = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY!,
+});
 app.use(
     cors({
         origin: process.env.CLIENT_URL,
@@ -28,9 +31,6 @@ app.use(express.json());
 
 const uri = process.env.MONGO_URI as string;
 
-const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY!,
-});
 
 const client = new MongoClient(uri, {
     serverApi: {
@@ -145,7 +145,7 @@ async function getMentorReply(history: MentorMessage[]): Promise<string> {
     }));
 
     const response = await ai.models.generateContent({
-        model: "gemini-flash-latest",
+        model: "gemini-3.5-flash",
         contents: conversation,
         config: {
             systemInstruction: `
