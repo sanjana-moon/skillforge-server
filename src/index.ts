@@ -77,6 +77,29 @@ interface Course {
     whatYouWillLearn?: string[];
     requirements?: string[];
     targetAudience?: string[];
+    content?: {
+        lessons: {
+            id: string;
+            title: string;
+            description: string;
+            content: string;
+            codeExamples: {
+                id: string;
+                title: string;
+                code: string;
+                language: string;
+                explanation: string;
+            }[];
+            practiceQuestions: {
+                id: string;
+                question: string;
+                answer: string;
+                hint: string;
+            }[];
+            youtubeLinks: string[];
+            quickTips: string[];
+        }[];
+    };
 }
 
 interface Enrollment {
@@ -138,17 +161,39 @@ interface AuthenticatedRequest extends Request {
 // AI MENTOR
 // ============================
 
-async function getMentorReply(history: MentorMessage[]): Promise<string> {
-    const conversation = history.map((message) => ({
-        role: message.role === "assistant" ? "model" : "user",
-        parts: [{ text: message.content }],
-    }));
+function toGeminiContents(messages: MentorMessage[]) {
+    return messages
+        .filter((m) => m.content && m.content.trim().length > 0)
+        .map((m) => ({
+            role: m.role === "assistant" ? "model" : "user",
+            parts: [{ text: m.content }],
+        }));
+}
 
-    const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: conversation,
-        config: {
-            systemInstruction: `
+async function getMentorReply(conversation: MentorMessage[]): Promise<string> {
+    const contents = toGeminiContents(conversation);
+
+    if (contents.length === 0) {
+        throw new Error("Empty conversation - nothing to send to Gemini.");
+    }
+
+    const models = [
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash",
+    ];
+
+    let allQuotaExceeded = true; // stays true only if every model/attempt failed with 429
+
+    for (const model of models) {
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                console.log(`🤖 Using ${model} (Attempt ${attempt})`);
+
+                const response = await ai.models.generateContent({
+                    model,
+                    contents,
+                    config: {
+                        systemInstruction: `
 You are SkillForge AI Mentor.
 
 Your role is to help students learn programming, web development, AI, and technology.
@@ -161,15 +206,40 @@ Rules:
 - If asked about careers, provide practical guidance.
 - If you don't know something, say so instead of making it up.
 `,
-        },
-    });
+                    },
+                });
 
-    return (
-        response.text ??
-        "Sorry, I couldn't generate a response right now."
+                return response.text ?? "Sorry, I couldn't generate a response.";
+            } catch (error: any) {
+                console.error(`❌ ${model} failed (Attempt ${attempt})`, error);
+
+                if (error.status !== 429) {
+                    allQuotaExceeded = false;
+                }
+
+                if ((error.status === 503 || error.status === 429) && attempt < 3) {
+                    const delay = error.status === 429 ? 40000 : attempt * 2000;
+                    await new Promise((resolve) => setTimeout(resolve, delay));
+                    continue;
+                }
+
+                if (error.status === 503 || error.status === 429) {
+                    break; // move to next model
+                }
+
+                throw error; // non-retryable error, fail immediately
+            }
+        }
+    }
+
+    if (allQuotaExceeded) {
+        throw new Error("QUOTA_EXCEEDED");
+    }
+
+    throw new Error(
+        "AI service is temporarily unavailable. Please try again later."
     );
 }
-
 async function run() {
     await client.connect();
     await client.db("admin").command({ ping: 1 });
@@ -489,6 +559,129 @@ async function run() {
             res.send(categories);
         } catch (error) {
             res.status(500).send({ message: "Failed to fetch categories" });
+        }
+    });
+
+    // ============================
+    // COURSE CONTENT ROUTES
+    // ============================
+
+    // GET course content (public)
+    app.get("/api/courses/:id/content", async (req: Request, res: Response) => {
+        try {
+            const { id } = req.params;
+
+            // ✅ Ensure id is a string
+            const courseId = Array.isArray(id) ? id[0] : id;
+
+            if (!courseId || !ObjectId.isValid(courseId)) {
+                res.status(400).send({ message: "Invalid course ID" });
+                return;
+            }
+
+            const course = await courseCollection.findOne({
+                _id: new ObjectId(courseId),
+            });
+
+            if (!course) {
+                res.status(404).send({ message: "Course not found" });
+                return;
+            }
+
+            res.send({
+                content: course.content || { lessons: [] },
+            });
+        } catch (error) {
+            console.error("Error fetching course content:", error);
+            res.status(500).send({ message: "Failed to fetch course content" });
+        }
+    });
+
+    // SAVE course content (instructor only)
+    app.post("/api/courses/:id/content", verifyToken, requireRole("instructor"),
+        async (req: AuthenticatedRequest, res: Response) => {
+            try {
+                const { id } = req.params;
+                const { content } = req.body as { content: any };
+
+                // ✅ Ensure id is a string
+                const courseId = Array.isArray(id) ? id[0] : id;
+
+                if (!courseId || !ObjectId.isValid(courseId)) {
+                    res.status(400).send({ message: "Invalid course ID" });
+                    return;
+                }
+
+                const course = await courseCollection.findOne({
+                    _id: new ObjectId(courseId),
+                });
+
+                if (!course) {
+                    res.status(404).send({ message: "Course not found" });
+                    return;
+                }
+
+                // Check if user is the instructor or admin
+                if (course.instructorEmail !== req.user?.email && req.user?.role !== "admin") {
+                    res.status(403).send({ message: "Not authorized to update this course" });
+                    return;
+                }
+
+                await courseCollection.updateOne(
+                    { _id: new ObjectId(courseId) },
+                    {
+                        $set: {
+                            content: content,
+                            updatedAt: new Date(),
+                        },
+                    }
+                );
+
+                res.send({
+                    success: true,
+                    message: "Course content saved successfully",
+                });
+            } catch (error) {
+                console.error("Error saving course content:", error);
+                res.status(500).send({ message: "Failed to save course content" });
+            }
+        }
+    );
+
+    // GET a specific lesson from a course (public)
+    app.get("/api/courses/:courseId/lessons/:lessonId", async (req: Request, res: Response) => {
+        try {
+            const { courseId, lessonId } = req.params;
+
+            // ✅ Ensure courseId is a string
+            const courseIdStr = Array.isArray(courseId) ? courseId[0] : courseId;
+            const lessonIdStr = Array.isArray(lessonId) ? lessonId[0] : lessonId;
+
+            if (!courseIdStr || !ObjectId.isValid(courseIdStr)) {
+                res.status(400).send({ message: "Invalid course ID" });
+                return;
+            }
+
+            const course = await courseCollection.findOne({
+                _id: new ObjectId(courseIdStr),
+            });
+
+            if (!course) {
+                res.status(404).send({ message: "Course not found" });
+                return;
+            }
+
+            const lesson = course.content?.lessons?.find((l) => l.id === lessonIdStr);
+
+            if (!lesson) {
+                res.status(404).send({ message: "Lesson not found" });
+                return;
+            }
+
+            res.send(lesson);
+        } catch (error) {
+            console.error("Error fetching lesson:", error);
+            res.status(500).send({ message: "Failed to fetch lesson" });
         }
     });
 
@@ -1440,64 +1633,72 @@ async function run() {
     );
 
     app.post("/api/ai-mentor/sessions/:sessionId/messages", verifyToken,
-        async (req: AuthenticatedRequest, res: Response) => {
-            try {
-                const { sessionId } = req.params;
-                const { message } = req.body as { message: string };
+    async (req: AuthenticatedRequest, res: Response) => {
+        try {
+            const { sessionId } = req.params;
+            const { message } = req.body as { message: string };
 
-                if (!message) {
-                    res.status(400).send({ message: "Message is required" });
-                    return;
-                }
-
-                const session = await mentorSessionCollection.findOne({
-                    _id: new ObjectId(sessionId as string),
-                    userEmail: req.user?.email,
-                });
-
-                if (!session) {
-                    res.status(404).send({ message: "Session not found" });
-                    return;
-                }
-
-                const userMessage: MentorMessage = {
-                    role: "user",
-                    content: message,
-                    createdAt: new Date(),
-                };
-
-                const updatedHistory = [...session.messages, userMessage];
-
-                const reply = await getMentorReply(updatedHistory);
-
-                const assistantMessage: MentorMessage = {
-                    role: "assistant",
-                    content: reply,
-                    createdAt: new Date(),
-                };
-
-                const finalHistory = [...updatedHistory, assistantMessage];
-
-                await mentorSessionCollection.updateOne(
-                    { _id: new ObjectId(sessionId as string) },
-                    {
-                        $set: {
-                            messages: finalHistory,
-                            updatedAt: new Date(),
-                            ...(session.messages.length === 0
-                                ? { title: message.slice(0, 50) }
-                                : {}),
-                        },
-                    }
-                );
-
-                res.send({ reply: assistantMessage });
-            } catch (error) {
-                console.error(error);
-                res.status(500).send({ message: "Failed to get mentor reply" });
+            if (!message) {
+                res.status(400).send({ message: "Message is required" });
+                return;
             }
+
+            const session = await mentorSessionCollection.findOne({
+                _id: new ObjectId(sessionId as string),
+                userEmail: req.user?.email,
+            });
+
+            if (!session) {
+                res.status(404).send({ message: "Session not found" });
+                return;
+            }
+
+            const userMessage: MentorMessage = {
+                role: "user",
+                content: message,
+                createdAt: new Date(),
+            };
+
+            const updatedHistory = [...session.messages, userMessage];
+
+            const reply = await getMentorReply(updatedHistory);
+
+            const assistantMessage: MentorMessage = {
+                role: "assistant",
+                content: reply,
+                createdAt: new Date(),
+            };
+
+            const finalHistory = [...updatedHistory, assistantMessage];
+
+            await mentorSessionCollection.updateOne(
+                { _id: new ObjectId(sessionId as string) },
+                {
+                    $set: {
+                        messages: finalHistory,
+                        updatedAt: new Date(),
+                        ...(session.messages.length === 0
+                            ? { title: message.slice(0, 50) }
+                            : {}),
+                    },
+                }
+            );
+
+            res.send({ reply: assistantMessage });
+        } catch (error: any) {
+            console.error(error);
+
+            if (error.message === "QUOTA_EXCEEDED") {
+                res.status(429).send({
+                    message: "Daily AI mentor limit reached. Please try again tomorrow.",
+                });
+                return;
+            }
+
+            res.status(500).send({ message: "Failed to get mentor reply" });
         }
-    );
+    }
+);
 
     // ============================
     // HEALTH / ROOT
