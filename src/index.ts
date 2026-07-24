@@ -182,7 +182,7 @@ async function getMentorReply(conversation: MentorMessage[]): Promise<string> {
         "gemini-3.5-flash",
     ];
 
-    let allQuotaExceeded = true; // stays true only if every model/attempt failed with 429
+    let allQuotaExceeded = true;
 
     for (const model of models) {
         for (let attempt = 1; attempt <= 3; attempt++) {
@@ -224,10 +224,10 @@ Rules:
                 }
 
                 if (error.status === 503 || error.status === 429) {
-                    break; // move to next model
+                    break;
                 }
 
-                throw error; // non-retryable error, fail immediately
+                throw error;
             }
         }
     }
