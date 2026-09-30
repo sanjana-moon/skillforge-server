@@ -31,13 +31,14 @@ app.use(express.json());
 
 const uri = process.env.MONGO_URI as string;
 
-
 const client = new MongoClient(uri, {
     serverApi: {
         version: ServerApiVersion.v1,
         strict: true,
         deprecationErrors: true,
     },
+    serverSelectionTimeoutMS: 10000,
+    maxPoolSize: 10,
 });
 
 const JWKS = createRemoteJWKSet(
@@ -187,7 +188,7 @@ async function getMentorReply(conversation: MentorMessage[]): Promise<string> {
     for (const model of models) {
         for (let attempt = 1; attempt <= 3; attempt++) {
             try {
-                console.log(`🤖 Using ${model} (Attempt ${attempt})`);
+                console.log(`Using ${model} (Attempt ${attempt})`);
 
                 const response = await ai.models.generateContent({
                     model,
@@ -211,7 +212,7 @@ Rules:
 
                 return response.text ?? "Sorry, I couldn't generate a response.";
             } catch (error: any) {
-                console.error(`❌ ${model} failed (Attempt ${attempt})`, error);
+                console.error(`${model} failed (Attempt ${attempt})`, error);
 
                 if (error.status !== 429) {
                     allQuotaExceeded = false;
@@ -240,9 +241,9 @@ Rules:
         "AI service is temporarily unavailable. Please try again later."
     );
 }
+
 async function run() {
     await client.connect();
-    await client.db("admin").command({ ping: 1 });
 
     const db = client.db("skillforge");
 
@@ -252,18 +253,22 @@ async function run() {
     const usersCollection: Collection<AppUser> = db.collection("user");
     const mentorSessionCollection: Collection<MentorSession> = db.collection("mentorSessions");
 
-    await enrollmentCollection.createIndex(
-        { studentEmail: 1, courseId: 1 },
-        { unique: true }
-    );
-    await courseCollection.createIndex({ instructorEmail: 1 });
-    await courseCollection.createIndex({ approvalStatus: 1, publishStatus: 1 });
-    await mentorSessionCollection.createIndex({ userEmail: 1 });
-    await usersCollection.createIndex({ email: 1 }, { unique: true });
-    await paymentCollection.createIndex({ transactionId: 1 }, { unique: true });
+    // Indexes run in the background: they never block or crash startup
+    Promise.allSettled([
+        enrollmentCollection.createIndex({ studentEmail: 1, courseId: 1 }, { unique: true }),
+        courseCollection.createIndex({ instructorEmail: 1 }),
+        courseCollection.createIndex({ approvalStatus: 1, publishStatus: 1, createdAt: -1 }),
+        mentorSessionCollection.createIndex({ userEmail: 1 }),
+        usersCollection.createIndex({ email: 1 }, { unique: true }),
+        paymentCollection.createIndex({ transactionId: 1 }, { unique: true }),
+    ]).then((results) => {
+        results.forEach((r, i) => {
+            if (r.status === "rejected") console.error(`Index #${i} failed:`, r.reason);
+        });
+    });
 
     // ============================
-    // AUTH MIDDLEWARE (FIXED)
+    // AUTH MIDDLEWARE
     // ============================
 
     const verifyToken = async (
@@ -288,7 +293,6 @@ async function run() {
         try {
             const { payload } = await jwtVerify(token, JWKS);
 
-            // Extract email from payload (could be in email or sub field)
             const email = typeof payload.email === 'string'
                 ? payload.email
                 : typeof payload.sub === 'string'
@@ -301,21 +305,20 @@ async function run() {
             };
 
             if (email) {
-                const existingUser = await usersCollection.findOne({
-                    email: email.toLowerCase()
-                });
-
-                if (!existingUser) {
-                    const newUser: AppUser = {
-                        name: (payload.name as string) || email.split('@')[0],
-                        email: email.toLowerCase(),
-                        role: "student",
-                        isBlocked: false,
-                        profileImage: (payload.image as string) || null,
-                    };
-                    await usersCollection.insertOne(newUser);
-                    console.log(`✅ Auto-created user: ${email}`);
-                }
+                const lower = email.toLowerCase();
+                await usersCollection.updateOne(
+                    { email: lower },
+                    {
+                        $setOnInsert: {
+                            name: (payload.name as string) || lower.split("@")[0],
+                            email: lower,
+                            role: "student",
+                            isBlocked: false,
+                            profileImage: (payload.image as string) || null,
+                        },
+                    },
+                    { upsert: true }
+                );
             }
 
             next();
@@ -335,26 +338,7 @@ async function run() {
                     return;
                 }
 
-                // Find user (case-insensitive)
-                let user = await usersCollection.findOne({
-                    email: email.toLowerCase()
-                });
-
-                // ✅ If user doesn't exist, create them
-                if (!user) {
-                    const newUser: AppUser = {
-                        name: req.user?.name as string || email.split('@')[0],
-                        email: email.toLowerCase(),
-                        role: "student",
-                        isBlocked: false,
-                        profileImage: req.user?.image as string || null,
-                    };
-                    await usersCollection.insertOne(newUser);
-                    user = await usersCollection.findOne({
-                        email: email.toLowerCase()
-                    });
-                    console.log(`✅ Auto-created user in requireRole: ${email}`);
-                }
+                const user = await usersCollection.findOne({ email: email.toLowerCase() });
 
                 if (!user) {
                     res.status(404).send({ message: "User not found" });
@@ -368,7 +352,7 @@ async function run() {
 
                 if (!roles.includes(user.role)) {
                     res.status(403).send({
-                        message: `Forbidden - Required role: ${roles.join(", ")}`
+                        message: `Forbidden - Required role: ${roles.join(", ")}`,
                     });
                     return;
                 }
@@ -465,8 +449,8 @@ async function run() {
                 limit = "8",
             } = req.query as Record<string, string>;
 
-            const currentPage = Number(page);
-            const pageSize = Number(limit);
+            const currentPage = Math.max(1, Number(page) || 1);
+            const pageSize = Math.min(50, Math.max(1, Number(limit) || 8));
 
             const query: Record<string, unknown> = {
                 approvalStatus: "approved",
@@ -474,19 +458,18 @@ async function run() {
             };
 
             if (search) {
+                const safe = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
                 query.$or = [
-                    { title: { $regex: search, $options: "i" } },
-                    { category: { $regex: search, $options: "i" } },
+                    { title: { $regex: safe, $options: "i" } },
+                    { category: { $regex: safe, $options: "i" } },
                 ];
             }
 
             if (category && category !== "all") {
-                query.category = category;
+                const safeCat = category.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                query.category = { $regex: `^${safeCat}$`, $options: "i" };
             }
-
-            if (level && level !== "all") {
-                query.level = level;
-            }
+            if (level && level !== "all") query.level = level;
 
             if (minPrice || maxPrice) {
                 const priceQuery: Record<string, number> = {};
@@ -495,34 +478,25 @@ async function run() {
                 query.price = priceQuery;
             }
 
-            let sortOption: Record<string, 1 | -1> = {};
-
+            let sortOption: Record<string, 1 | -1> = { createdAt: -1 };
             switch (sort) {
-                case "title":
-                    sortOption = { title: 1 };
-                    break;
-                case "price-low":
-                    sortOption = { price: 1 };
-                    break;
-                case "price-high":
-                    sortOption = { price: -1 };
-                    break;
-                case "rating":
-                    sortOption = { avgRating: -1 };
-                    break;
-                case "newest":
-                    sortOption = { createdAt: -1 };
-                    break;
+                case "title": sortOption = { title: 1 }; break;
+                case "price-low": sortOption = { price: 1 }; break;
+                case "price-high": sortOption = { price: -1 }; break;
+                case "rating": sortOption = { avgRating: -1 }; break;
+                case "newest": sortOption = { createdAt: -1 }; break;
+                case "popular": sortOption = { enrollmentCount: -1, createdAt: -1 }; break;
             }
 
-            const totalCourses = await courseCollection.countDocuments(query);
-
-            const courses = await courseCollection
-                .find(query)
-                .sort(sortOption)
-                .skip((currentPage - 1) * pageSize)
-                .limit(pageSize)
-                .toArray();
+            const [totalCourses, courses] = await Promise.all([
+                courseCollection.countDocuments(query),
+                courseCollection
+                    .find(query, { projection: { content: 0 } })
+                    .sort(sortOption)
+                    .skip((currentPage - 1) * pageSize)
+                    .limit(pageSize)
+                    .toArray(),
+            ]);
 
             res.send({
                 courses,
@@ -531,47 +505,62 @@ async function run() {
                 totalPages: Math.ceil(totalCourses / pageSize),
             });
         } catch (error) {
+            console.error("Error fetching courses:", error);
             res.status(500).send({ message: "Failed to fetch courses" });
         }
     });
 
+    // Dedicated featured route: top courses by enrollments, optional ?category=
     app.get("/api/courses/featured", async (req: Request, res: Response) => {
         try {
+            const { category, limit = "8" } = req.query as Record<string, string>;
+            const pageSize = Math.min(24, Math.max(1, Number(limit) || 8));
+
+            const query: Record<string, unknown> = {
+                approvalStatus: "approved",
+                publishStatus: "published",
+            };
+
+            if (category && category !== "all") {
+                const safeCat = category.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                query.category = { $regex: `^${safeCat}$`, $options: "i" };
+            }
+
             const courses = await courseCollection
-                .find({ approvalStatus: "approved", publishStatus: "published" })
-                .sort({ enrollmentCount: -1, createdAt: -1 })
-                .limit(8)
+                .find(query, { projection: { content: 0 } })
+                .sort({ enrollmentCount: -1, avgRating: -1, createdAt: -1 })
+                .limit(pageSize)
                 .toArray();
 
             res.send(courses);
         } catch (error) {
+            console.error("Error fetching featured courses:", error);
             res.status(500).send({ message: "Failed to fetch featured courses" });
         }
     });
 
     app.get("/api/categories", async (req: Request, res: Response) => {
         try {
-            const categories = await courseCollection.distinct("category", {
-                approvalStatus: "approved",
-                publishStatus: "published",
-            });
+            const categories = await courseCollection
+                .aggregate([
+                    { $match: { approvalStatus: "approved", publishStatus: "published" } },
+                    { $group: { _id: "$category", count: { $sum: 1 } } },
+                    { $sort: { count: -1 } },
+                    { $project: { _id: 0, name: "$_id", count: 1 } },
+                ])
+                .toArray();
 
             res.send(categories);
         } catch (error) {
+            console.error("Error fetching categories:", error);
             res.status(500).send({ message: "Failed to fetch categories" });
         }
     });
-
-    // ============================
-    // COURSE CONTENT ROUTES
-    // ============================
 
     // GET course content (public)
     app.get("/api/courses/:id/content", async (req: Request, res: Response) => {
         try {
             const { id } = req.params;
-
-            // ✅ Ensure id is a string
             const courseId = Array.isArray(id) ? id[0] : id;
 
             if (!courseId || !ObjectId.isValid(courseId)) {
@@ -603,8 +592,6 @@ async function run() {
             try {
                 const { id } = req.params;
                 const { content } = req.body as { content: any };
-
-                // ✅ Ensure id is a string
                 const courseId = Array.isArray(id) ? id[0] : id;
 
                 if (!courseId || !ObjectId.isValid(courseId)) {
@@ -621,7 +608,6 @@ async function run() {
                     return;
                 }
 
-                // Check if user is the instructor or admin
                 if (course.instructorEmail !== req.user?.email && req.user?.role !== "admin") {
                     res.status(403).send({ message: "Not authorized to update this course" });
                     return;
@@ -652,8 +638,6 @@ async function run() {
     app.get("/api/courses/:courseId/lessons/:lessonId", async (req: Request, res: Response) => {
         try {
             const { courseId, lessonId } = req.params;
-
-            // ✅ Ensure courseId is a string
             const courseIdStr = Array.isArray(courseId) ? courseId[0] : courseId;
             const lessonIdStr = Array.isArray(lessonId) ? lessonId[0] : lessonId;
 
@@ -691,37 +675,47 @@ async function run() {
 
     app.get("/api/courses/instructor/:email", verifyToken, requireRole("instructor"), requireSelf("email"),
         async (req: Request, res: Response) => {
-            const email = req.params.email;
+            try {
+                const email = req.params.email;
 
-            const result = await courseCollection
-                .find({ instructorEmail: email })
-                .sort({ createdAt: -1 })
-                .toArray();
+                const result = await courseCollection
+                    .find({ instructorEmail: email }, { projection: { content: 0 } })
+                    .sort({ createdAt: -1 })
+                    .toArray();
 
-            res.send(result);
+                res.send(result);
+            } catch (error) {
+                console.error("Error fetching instructor courses:", error);
+                res.status(500).send({ message: "Failed to fetch instructor courses" });
+            }
         }
     );
 
     app.post("/api/courses", verifyToken, requireRole("instructor"),
         async (req: AuthenticatedRequest, res: Response) => {
-            const data = req.body as Partial<Course>;
+            try {
+                const data = req.body as Partial<Course>;
 
-            const result = await courseCollection.insertOne({
-                ...(data as Course),
-                instructorEmail: req.user!.email as string,
-                price: Number(data.price),
-                approvalStatus: "pending",
-                publishStatus: "unpublished",
-                avgRating: 0,
-                reviewCount: 0,
-                enrollmentCount: 0,
-                whatYouWillLearn: data.whatYouWillLearn || [],
-                requirements: data.requirements || [],
-                targetAudience: data.targetAudience || [],
-                createdAt: new Date(),
-            });
+                const result = await courseCollection.insertOne({
+                    ...(data as Course),
+                    instructorEmail: req.user!.email as string,
+                    price: Number(data.price),
+                    approvalStatus: "pending",
+                    publishStatus: "unpublished",
+                    avgRating: 0,
+                    reviewCount: 0,
+                    enrollmentCount: 0,
+                    whatYouWillLearn: data.whatYouWillLearn || [],
+                    requirements: data.requirements || [],
+                    targetAudience: data.targetAudience || [],
+                    createdAt: new Date(),
+                });
 
-            res.send(result);
+                res.send(result);
+            } catch (error) {
+                console.error("Error creating course:", error);
+                res.status(500).send({ message: "Failed to create course" });
+            }
         }
     );
 
@@ -811,25 +805,30 @@ async function run() {
 
     app.delete("/api/courses/:id", verifyToken, requireRole("instructor"),
         async (req: AuthenticatedRequest, res: Response) => {
-            const { id } = req.params;
+            try {
+                const { id } = req.params;
 
-            const course = await courseCollection.findOne({ _id: new ObjectId(id as string) });
+                const course = await courseCollection.findOne({ _id: new ObjectId(id as string) });
 
-            if (!course) {
-                res.status(404).send({ message: "Course not found" });
-                return;
+                if (!course) {
+                    res.status(404).send({ message: "Course not found" });
+                    return;
+                }
+
+                if (course.instructorEmail !== req.user?.email) {
+                    res.status(403).send({ message: "Not authorized to delete this course" });
+                    return;
+                }
+
+                const result = await courseCollection.deleteOne({ _id: new ObjectId(id as string) });
+
+                await enrollmentCollection.deleteMany({ courseId: id as string });
+
+                res.send(result);
+            } catch (error) {
+                console.error("Error deleting course:", error);
+                res.status(500).send({ message: "Failed to delete course" });
             }
-
-            if (course.instructorEmail !== req.user?.email) {
-                res.status(403).send({ message: "Not authorized to delete this course" });
-                return;
-            }
-
-            const result = await courseCollection.deleteOne({ _id: new ObjectId(id as string) });
-
-            await enrollmentCollection.deleteMany({ courseId: id as string });
-
-            res.send(result);
         }
     );
 
@@ -837,9 +836,17 @@ async function run() {
     app.get("/api/courses/:id", async (req: Request, res: Response) => {
         try {
             const { id } = req.params;
-            const result = await courseCollection.findOne({
-                _id: new ObjectId(id as string),
-            });
+
+            if (!ObjectId.isValid(id as string)) {
+                res.status(400).send({ message: "Invalid course ID" });
+                return;
+            }
+
+            // content excluded: lessons are served by /content and /lessons/:lessonId
+            const result = await courseCollection.findOne(
+                { _id: new ObjectId(id as string) },
+                { projection: { content: 0 } }
+            );
 
             if (!result) {
                 res.status(404).send({ message: "Course not found" });
@@ -863,7 +870,7 @@ async function run() {
                 const { email } = req.params;
 
                 const courses = await courseCollection
-                    .find({ instructorEmail: email as string })
+                    .find({ instructorEmail: email as string }, { projection: { content: 0 } })
                     .toArray();
 
                 const totalCourses = courses.length;
@@ -927,7 +934,6 @@ async function run() {
 
                 const studentEmail = req.user!.email as string;
 
-                // Get user from database
                 const user = await usersCollection.findOne({
                     email: studentEmail,
                 });
@@ -939,7 +945,6 @@ async function run() {
                     return;
                 }
 
-                // Check if already enrolled
                 const existing = await enrollmentCollection.findOne({
                     courseId,
                     studentEmail,
@@ -952,7 +957,6 @@ async function run() {
                     return;
                 }
 
-                // Create enrollment
                 const result = await enrollmentCollection.insertOne({
                     courseId,
                     courseTitle,
@@ -962,7 +966,6 @@ async function run() {
                     createdAt: new Date(),
                 });
 
-                // Increase enrollment count
                 await courseCollection.updateOne(
                     { _id: new ObjectId(courseId) },
                     {
@@ -987,14 +990,19 @@ async function run() {
 
     app.get("/api/enrollments/student/:email", verifyToken, requireRole("student"), requireSelf("email"),
         async (req: Request, res: Response) => {
-            const email = req.params.email;
+            try {
+                const email = req.params.email;
 
-            const result = await enrollmentCollection
-                .find({ studentEmail: email })
-                .sort({ createdAt: -1 })
-                .toArray();
+                const result = await enrollmentCollection
+                    .find({ studentEmail: email })
+                    .sort({ createdAt: -1 })
+                    .toArray();
 
-            res.send(result);
+                res.send(result);
+            } catch (error) {
+                console.error("Error fetching student enrollments:", error);
+                res.status(500).send({ message: "Failed to fetch enrollments" });
+            }
         }
     );
 
@@ -1086,7 +1094,7 @@ async function run() {
     );
 
     // ============================
-    // ✅ CHECKOUT - Store enrollment & payment in MongoDB
+    // CHECKOUT - Store enrollment & payment in MongoDB
     // ============================
 
     app.post("/api/checkout", verifyToken, requireRole("student"),
@@ -1100,7 +1108,6 @@ async function run() {
 
                 const studentEmail = req.user!.email as string;
 
-                // Get user from database
                 const user = await usersCollection.findOne({
                     email: studentEmail,
                 });
@@ -1113,7 +1120,6 @@ async function run() {
                     return;
                 }
 
-                // Check if course exists and is approved/published
                 const course = await courseCollection.findOne({
                     _id: new ObjectId(courseId),
                     approvalStatus: "approved",
@@ -1128,7 +1134,6 @@ async function run() {
                     return;
                 }
 
-                // Check if already enrolled
                 const existingEnrollment = await enrollmentCollection.findOne({
                     courseId,
                     studentEmail,
@@ -1142,7 +1147,6 @@ async function run() {
                     return;
                 }
 
-                // Check if payment already processed
                 const existingPayment = await paymentCollection.findOne({
                     transactionId,
                 });
@@ -1155,7 +1159,6 @@ async function run() {
                     return;
                 }
 
-                // Create enrollment
                 const enrollmentResult = await enrollmentCollection.insertOne({
                     courseId,
                     courseTitle: course.title,
@@ -1165,7 +1168,6 @@ async function run() {
                     createdAt: new Date(),
                 });
 
-                // Update course enrollment count
                 await courseCollection.updateOne(
                     { _id: new ObjectId(courseId) },
                     {
@@ -1175,7 +1177,6 @@ async function run() {
                     }
                 );
 
-                // Create payment record
                 await paymentCollection.insertOne({
                     studentEmail,
                     studentName: user.name,
@@ -1368,7 +1369,7 @@ async function run() {
         async (req: Request, res: Response) => {
             try {
                 const courses = await courseCollection
-                    .find({ approvalStatus: "pending" })
+                    .find({ approvalStatus: "pending" }, { projection: { content: 0 } })
                     .sort({ createdAt: -1 })
                     .toArray();
 
@@ -1390,7 +1391,7 @@ async function run() {
                 }
 
                 const result = await courseCollection
-                    .find(query)
+                    .find(query, { projection: { content: 0 } })
                     .sort({ createdAt: -1 })
                     .toArray();
 
@@ -1403,20 +1404,25 @@ async function run() {
 
     app.patch("/api/admin/courses/:id", verifyToken, requireRole("admin"),
         async (req: Request, res: Response) => {
-            const id = req.params.id;
-            const { approvalStatus } = req.body as { approvalStatus: ApprovalStatus };
+            try {
+                const id = req.params.id;
+                const { approvalStatus } = req.body as { approvalStatus: ApprovalStatus };
 
-            if (!approvalStatus) {
-                res.status(400).send({ message: "approvalStatus is required" });
-                return;
+                if (!approvalStatus) {
+                    res.status(400).send({ message: "approvalStatus is required" });
+                    return;
+                }
+
+                const result = await courseCollection.updateOne(
+                    { _id: new ObjectId(id as string) },
+                    { $set: { approvalStatus } }
+                );
+
+                res.send(result);
+            } catch (error) {
+                console.error(error);
+                res.status(500).send({ message: "Failed to update course" });
             }
-
-            const result = await courseCollection.updateOne(
-                { _id: new ObjectId(id as string) },
-                { $set: { approvalStatus } }
-            );
-
-            res.send(result);
         }
     );
 
@@ -1527,16 +1533,15 @@ async function run() {
     app.get("/api/admin/dashboard", verifyToken, requireRole("admin"),
         async (req: Request, res: Response) => {
             try {
-                const totalUsers = await usersCollection.countDocuments({
-                    role: { $ne: "admin" },
-                });
-
-                const totalCourses = await courseCollection.countDocuments();
-                const totalEnrollments = await enrollmentCollection.countDocuments();
-
-                const categoryStats = await courseCollection
-                    .aggregate([{ $group: { _id: "$category", value: { $sum: 1 } } }])
-                    .toArray();
+                const [totalUsers, totalCourses, totalEnrollments, categoryStats] =
+                    await Promise.all([
+                        usersCollection.countDocuments({ role: { $ne: "admin" } }),
+                        courseCollection.countDocuments(),
+                        enrollmentCollection.countDocuments(),
+                        courseCollection
+                            .aggregate([{ $group: { _id: "$category", value: { $sum: 1 } } }])
+                            .toArray(),
+                    ]);
 
                 const coursesByCategory = categoryStats.map((item) => ({
                     category: item._id,
@@ -1562,143 +1567,178 @@ async function run() {
 
     app.get("/api/ai-mentor/sessions", verifyToken,
         async (req: AuthenticatedRequest, res: Response) => {
-            const email = req.user?.email;
+            try {
+                const email = req.user?.email;
 
-            if (!email) {
-                res.status(401).send({ message: "Unauthorized" });
-                return;
+                if (!email) {
+                    res.status(401).send({ message: "Unauthorized" });
+                    return;
+                }
+
+                const sessions = await mentorSessionCollection
+                    .find({ userEmail: email })
+                    .sort({ updatedAt: -1 })
+                    .toArray();
+
+                res.send(sessions);
+            } catch (error) {
+                console.error(error);
+                res.status(500).send({ message: "Failed to fetch sessions" });
             }
-
-            const sessions = await mentorSessionCollection
-                .find({ userEmail: email })
-                .sort({ updatedAt: -1 })
-                .toArray();
-
-            res.send(sessions);
         }
     );
 
     app.post("/api/ai-mentor/sessions", verifyToken,
         async (req: AuthenticatedRequest, res: Response) => {
-            const email = req.user?.email;
+            try {
+                const email = req.user?.email;
 
-            if (!email) {
-                res.status(401).send({ message: "Unauthorized" });
-                return;
+                if (!email) {
+                    res.status(401).send({ message: "Unauthorized" });
+                    return;
+                }
+
+                const now = new Date();
+
+                const result = await mentorSessionCollection.insertOne({
+                    userEmail: email,
+                    title: "New conversation",
+                    messages: [],
+                    createdAt: now,
+                    updatedAt: now,
+                });
+
+                res.send(result);
+            } catch (error) {
+                console.error(error);
+                res.status(500).send({ message: "Failed to create session" });
             }
-
-            const now = new Date();
-
-            const result = await mentorSessionCollection.insertOne({
-                userEmail: email,
-                title: "New conversation",
-                messages: [],
-                createdAt: now,
-                updatedAt: now,
-            });
-
-            res.send(result);
         }
     );
 
     app.get("/api/ai-mentor/sessions/:sessionId", verifyToken,
         async (req: AuthenticatedRequest, res: Response) => {
-            const { sessionId } = req.params;
+            try {
+                const { sessionId } = req.params;
 
-            const session = await mentorSessionCollection.findOne({
-                _id: new ObjectId(sessionId as string),
-                userEmail: req.user?.email,
-            });
+                if (!ObjectId.isValid(sessionId as string)) {
+                    res.status(400).send({ message: "Invalid session ID" });
+                    return;
+                }
 
-            if (!session) {
-                res.status(404).send({ message: "Session not found" });
-                return;
+                const session = await mentorSessionCollection.findOne({
+                    _id: new ObjectId(sessionId as string),
+                    userEmail: req.user?.email,
+                });
+
+                if (!session) {
+                    res.status(404).send({ message: "Session not found" });
+                    return;
+                }
+
+                res.send(session);
+            } catch (error) {
+                console.error(error);
+                res.status(500).send({ message: "Failed to fetch session" });
             }
-
-            res.send(session);
         }
     );
 
     app.delete("/api/ai-mentor/sessions/:sessionId", verifyToken,
         async (req: AuthenticatedRequest, res: Response) => {
-            const { sessionId } = req.params;
+            try {
+                const { sessionId } = req.params;
 
-            const result = await mentorSessionCollection.deleteOne({
-                _id: new ObjectId(sessionId as string),
-                userEmail: req.user?.email,
-            });
+                if (!ObjectId.isValid(sessionId as string)) {
+                    res.status(400).send({ message: "Invalid session ID" });
+                    return;
+                }
 
-            res.send(result);
+                const result = await mentorSessionCollection.deleteOne({
+                    _id: new ObjectId(sessionId as string),
+                    userEmail: req.user?.email,
+                });
+
+                res.send(result);
+            } catch (error) {
+                console.error(error);
+                res.status(500).send({ message: "Failed to delete session" });
+            }
         }
     );
 
     app.post("/api/ai-mentor/sessions/:sessionId/messages", verifyToken,
-    async (req: AuthenticatedRequest, res: Response) => {
-        try {
-            const { sessionId } = req.params;
-            const { message } = req.body as { message: string };
+        async (req: AuthenticatedRequest, res: Response) => {
+            try {
+                const { sessionId } = req.params;
+                const { message } = req.body as { message: string };
 
-            if (!message) {
-                res.status(400).send({ message: "Message is required" });
-                return;
-            }
-
-            const session = await mentorSessionCollection.findOne({
-                _id: new ObjectId(sessionId as string),
-                userEmail: req.user?.email,
-            });
-
-            if (!session) {
-                res.status(404).send({ message: "Session not found" });
-                return;
-            }
-
-            const userMessage: MentorMessage = {
-                role: "user",
-                content: message,
-                createdAt: new Date(),
-            };
-
-            const updatedHistory = [...session.messages, userMessage];
-
-            const reply = await getMentorReply(updatedHistory);
-
-            const assistantMessage: MentorMessage = {
-                role: "assistant",
-                content: reply,
-                createdAt: new Date(),
-            };
-
-            const finalHistory = [...updatedHistory, assistantMessage];
-
-            await mentorSessionCollection.updateOne(
-                { _id: new ObjectId(sessionId as string) },
-                {
-                    $set: {
-                        messages: finalHistory,
-                        updatedAt: new Date(),
-                        ...(session.messages.length === 0
-                            ? { title: message.slice(0, 50) }
-                            : {}),
-                    },
+                if (!message) {
+                    res.status(400).send({ message: "Message is required" });
+                    return;
                 }
-            );
 
-            res.send({ reply: assistantMessage });
-        } catch (error: any) {
-            console.error(error);
+                if (!ObjectId.isValid(sessionId as string)) {
+                    res.status(400).send({ message: "Invalid session ID" });
+                    return;
+                }
 
-            if (error.message === "QUOTA_EXCEEDED") {
-                res.status(429).send({
-                    message: "Daily AI mentor limit reached. Please try again tomorrow.",
+                const session = await mentorSessionCollection.findOne({
+                    _id: new ObjectId(sessionId as string),
+                    userEmail: req.user?.email,
                 });
-                return;
-            }
 
-            res.status(500).send({ message: "Failed to get mentor reply" });
+                if (!session) {
+                    res.status(404).send({ message: "Session not found" });
+                    return;
+                }
+
+                const userMessage: MentorMessage = {
+                    role: "user",
+                    content: message,
+                    createdAt: new Date(),
+                };
+
+                const updatedHistory = [...session.messages, userMessage];
+
+                const reply = await getMentorReply(updatedHistory);
+
+                const assistantMessage: MentorMessage = {
+                    role: "assistant",
+                    content: reply,
+                    createdAt: new Date(),
+                };
+
+                const finalHistory = [...updatedHistory, assistantMessage];
+
+                await mentorSessionCollection.updateOne(
+                    { _id: new ObjectId(sessionId as string) },
+                    {
+                        $set: {
+                            messages: finalHistory,
+                            updatedAt: new Date(),
+                            ...(session.messages.length === 0
+                                ? { title: message.slice(0, 50) }
+                                : {}),
+                        },
+                    }
+                );
+
+                res.send({ reply: assistantMessage });
+            } catch (error: any) {
+                console.error(error);
+
+                if (error.message === "QUOTA_EXCEEDED") {
+                    res.status(429).send({
+                        message: "Daily AI mentor limit reached. Please try again tomorrow.",
+                    });
+                    return;
+                }
+
+                res.status(500).send({ message: "Failed to get mentor reply" });
+            }
         }
-    }
-);
+    );
 
     // ============================
     // HEALTH / ROOT
@@ -1728,4 +1768,7 @@ async function run() {
     });
 }
 
-run().catch(console.error);
+run().catch((err) => {
+    console.error("Fatal startup error:", err);
+    process.exit(1);
+});
