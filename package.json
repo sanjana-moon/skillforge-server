@@ -1,10 +1,10 @@
 {
   "name": "skillforge-server",
   "version": "1.0.0",
-  "main": "dist/index.js",
+  "main": "dist/index.ts",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/index.js"
   },
