@@ -1,8 +1,8 @@
 import { ObjectId } from "mongodb";
 import { GoogleGenAI } from "@google/genai";
 import { env } from "../config/env.js";
-import { mentorSessionCollection } from "../config/db.js";
-import type { MentorMessage } from "../types/models.js";
+import { mentorSessionCollection, getDB } from "../config/db.js";
+import type { MentorMessage, MentorSession } from "../types/models.js";
 
 const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
@@ -79,7 +79,8 @@ Rules:
 }
 
 export async function listSessions(email: string) {
-  return mentorSessionCollection
+  const col = (await getDB()).collection<MentorSession>("mentorSessions");
+  return col
     .find({ userEmail: email })
     .sort({ updatedAt: -1 })
     .toArray();

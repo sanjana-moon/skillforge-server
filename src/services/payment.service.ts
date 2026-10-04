@@ -1,10 +1,11 @@
-import { ObjectId } from "mongodb";
 import {
   courseCollection,
   enrollmentCollection,
   paymentCollection,
   usersCollection,
+  getDB,
 } from "../config/db.js";
+import type { Payment } from "../types/models.js";
 
 export async function processCheckout(
   studentEmail: string,
@@ -15,8 +16,10 @@ export async function processCheckout(
   const user = await usersCollection.findOne({ email: studentEmail });
   if (!user) return { status: "USER_NOT_FOUND" as const };
 
+  const { ObjectId } = await import("mongodb");
+
   const course = await courseCollection.findOne({
-    _id: new ObjectId(courseId),
+    _id: ObjectId.createFromHexString(courseId),
     approvalStatus: "approved",
     publishStatus: "published",
   });
@@ -41,7 +44,7 @@ export async function processCheckout(
   });
 
   await courseCollection.updateOne(
-    { _id: new ObjectId(courseId) },
+    { _id: ObjectId.createFromHexString(courseId) },
     { $inc: { enrollmentCount: 1 } }
   );
 
@@ -60,7 +63,8 @@ export async function processCheckout(
 }
 
 export async function getPaymentsByStudent(email: string) {
-  return paymentCollection
+  const col = (await getDB()).collection<Payment>("payments");
+  return col
     .find({ studentEmail: email })
     .sort({ paidAt: -1 })
     .toArray();

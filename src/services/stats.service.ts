@@ -1,29 +1,37 @@
-import { courseCollection, enrollmentCollection } from "../config/db.js";
+import {
+  courseCollection,
+  enrollmentCollection,
+  usersCollection,
+} from "../config/db.js";
+import type { Course, Enrollment } from "../types/models.js";
 
 export async function getInstructorStats(email: string) {
-  const courses = await courseCollection
+  const courses = (await courseCollection
     .find({ instructorEmail: email }, { projection: { content: 0 } })
-    .toArray();
+    .toArray()) as Course[];
 
   const totalCourses = courses.length;
-  const courseIds = courses.map((c) => c._id!.toString());
+  const courseIds = courses.map((c: Course) => c._id!.toString());
 
-  const enrollments = await enrollmentCollection
+  const enrollments = (await enrollmentCollection
     .find({ courseId: { $in: courseIds } })
-    .toArray();
+    .toArray()) as Enrollment[];
 
   const totalStudents = enrollments.length;
 
   const popularCourses = courses
-    .sort((a, b) => (b.enrollmentCount || 0) - (a.enrollmentCount || 0))
+    .sort(
+      (a: Course, b: Course) =>
+        (b.enrollmentCount || 0) - (a.enrollmentCount || 0)
+    )
     .slice(0, 5)
-    .map((c) => ({
+    .map((c: Course) => ({
       title: c.title,
       enrollments: c.enrollmentCount || 0,
     }));
 
   const monthlyEnrollments: Record<string, number> = {};
-  enrollments.forEach((e) => {
+  enrollments.forEach((e: Enrollment) => {
     const date = new Date(e.createdAt);
     const month = date.toLocaleString("default", { month: "short" });
     monthlyEnrollments[month] = (monthlyEnrollments[month] || 0) + 1;
@@ -37,19 +45,21 @@ export async function getInstructorStats(email: string) {
 }
 
 export async function getStudentStats(email: string) {
-  const enrollments = await enrollmentCollection
+  const enrollments = (await enrollmentCollection
     .find({ studentEmail: email })
-    .toArray();
+    .toArray()) as Enrollment[];
 
   const enrolledCourses = enrollments.length;
-  const completedCourses = enrollments.filter((e) => e.progress === 100).length;
+  const completedCourses = enrollments.filter(
+    (e: Enrollment) => e.progress === 100
+  ).length;
   const inProgress = enrollments.filter(
-    (e) => e.progress > 0 && e.progress < 100
+    (e: Enrollment) => e.progress > 0 && e.progress < 100
   ).length;
 
   const recentCourses = enrollments
     .sort(
-      (a, b) =>
+      (a: Enrollment, b: Enrollment) =>
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     )
     .slice(0, 5);
@@ -60,7 +70,7 @@ export async function getStudentStats(email: string) {
 export async function getAdminDashboard() {
   const [totalUsers, totalCourses, totalEnrollments, categoryStats] =
     await Promise.all([
-      courseCollection.db.collection("user").countDocuments({ role: { $ne: "admin" } }),
+      usersCollection.countDocuments({ role: { $ne: "admin" } }),
       courseCollection.countDocuments(),
       enrollmentCollection.countDocuments(),
       courseCollection
@@ -68,7 +78,9 @@ export async function getAdminDashboard() {
         .toArray(),
     ]);
 
-  const coursesByCategory = categoryStats.map((item) => ({
+  const coursesByCategory = (
+    categoryStats as { _id: string; value: number }[]
+  ).map((item) => ({
     category: item._id,
     value: item.value,
   }));

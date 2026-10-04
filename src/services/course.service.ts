@@ -1,5 +1,9 @@
-import { ObjectId } from "mongodb";
-import { courseCollection, enrollmentCollection, usersCollection } from "../config/db.js";
+import {
+  courseCollection,
+  enrollmentCollection,
+  usersCollection,
+  getDB,
+} from "../config/db.js";
 import type { Course, PublishStatus } from "../types/models.js";
 
 interface ListCoursesParams {
@@ -76,9 +80,11 @@ export async function listCourses(params: ListCoursesParams) {
       break;
   }
 
+  const col = (await getDB()).collection<Course>("courses");
+
   const [totalCourses, courses] = await Promise.all([
-    courseCollection.countDocuments(query),
-    courseCollection
+    col.countDocuments(query),
+    col
       .find(query, { projection: { content: 0 } })
       .sort(sortOption)
       .skip((currentPage - 1) * pageSize)
@@ -110,7 +116,9 @@ export async function listFeaturedCourses(
     query.category = { $regex: `^${safeCat}$`, $options: "i" };
   }
 
-  return courseCollection
+  const col = (await getDB()).collection<Course>("courses");
+
+  return col
     .find(query, { projection: { content: 0 } })
     .sort({ enrollmentCount: -1, avgRating: -1, createdAt: -1 })
     .limit(pageSize)
@@ -118,42 +126,51 @@ export async function listFeaturedCourses(
 }
 
 export async function findCourseById(id: string) {
-  if (!ObjectId.isValid(id)) return null;
+  if (!/^[a-f\d]{24}$/i.test(id)) return null;
   return courseCollection.findOne(
-    { _id: new ObjectId(id) },
+    { _id: (await import("mongodb")).ObjectId.createFromHexString(id) },
     { projection: { content: 0 } }
   );
 }
 
 export async function findCourseContent(id: string) {
-  if (!ObjectId.isValid(id)) return null;
-  const course = await courseCollection.findOne({ _id: new ObjectId(id) });
+  if (!/^[a-f\d]{24}$/i.test(id)) return null;
+  const { ObjectId } = await import("mongodb");
+  const course = await courseCollection.findOne({
+    _id: ObjectId.createFromHexString(id),
+  });
   if (!course) return null;
   return course.content ?? { lessons: [] };
 }
 
 export async function findLesson(courseId: string, lessonId: string) {
-  if (!ObjectId.isValid(courseId)) return null;
+  if (!/^[a-f\d]{24}$/i.test(courseId)) return null;
+  const { ObjectId } = await import("mongodb");
   const course = await courseCollection.findOne({
-    _id: new ObjectId(courseId),
+    _id: ObjectId.createFromHexString(courseId),
   });
   if (!course) return null;
   if (!course.content?.lessons) return null;
-  return course.content.lessons.find((l) => l.id === lessonId) || null;
+  return (
+    course.content.lessons.find((l: { id: string }) => l.id === lessonId) ||
+    null
+  );
 }
 
 export async function saveCourseContent(
   courseId: string,
   content: NonNullable<Course["content"]>
 ): Promise<void> {
+  const { ObjectId } = await import("mongodb");
   await courseCollection.updateOne(
-    { _id: new ObjectId(courseId) },
+    { _id: ObjectId.createFromHexString(courseId) },
     { $set: { content, updatedAt: new Date() } }
   );
 }
 
 export async function listInstructorCourses(email: string) {
-  return courseCollection
+  const col = (await getDB()).collection<Course>("courses");
+  return col
     .find({ instructorEmail: email }, { projection: { content: 0 } })
     .sort({ createdAt: -1 })
     .toArray();
@@ -185,8 +202,9 @@ export async function createCourse(
 }
 
 export async function updateCourse(courseId: string, data: Partial<Course>) {
+  const { ObjectId } = await import("mongodb");
   return courseCollection.updateOne(
-    { _id: new ObjectId(courseId) },
+    { _id: ObjectId.createFromHexString(courseId) },
     { $set: { ...data, price: Number(data.price) } }
   );
 }
@@ -195,22 +213,25 @@ export async function setPublishStatus(
   courseId: string,
   publishStatus: PublishStatus
 ) {
+  const { ObjectId } = await import("mongodb");
   await courseCollection.updateOne(
-    { _id: new ObjectId(courseId) },
+    { _id: ObjectId.createFromHexString(courseId) },
     { $set: { publishStatus } }
   );
 }
 
 export async function deleteCourseAndEnrollments(courseId: string) {
+  const { ObjectId } = await import("mongodb");
   const result = await courseCollection.deleteOne({
-    _id: new ObjectId(courseId),
+    _id: ObjectId.createFromHexString(courseId),
   });
   await enrollmentCollection.deleteMany({ courseId });
   return result;
 }
 
 export async function listCategories() {
-  return courseCollection
+  const col = (await getDB()).collection<Course>("courses");
+  return col
     .aggregate([
       { $match: { approvalStatus: "approved", publishStatus: "published" } },
       { $group: { _id: "$category", count: { $sum: 1 } } },
@@ -224,8 +245,9 @@ export async function findCourseOwnedBy(
   courseId: string,
   instructorEmail: string
 ) {
+  const { ObjectId } = await import("mongodb");
   return courseCollection.findOne({
-    _id: new ObjectId(courseId),
+    _id: ObjectId.createFromHexString(courseId),
     instructorEmail,
   });
 }

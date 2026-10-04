@@ -1,5 +1,5 @@
-import { ObjectId } from "mongodb";
-import { courseCollection, enrollmentCollection, usersCollection } from "../config/db.js";
+import { courseCollection, enrollmentCollection, usersCollection, getDB } from "../config/db.js";
+import type { Enrollment } from "../types/models.js";
 
 export async function createEnrollment(
   courseId: string,
@@ -24,8 +24,9 @@ export async function createEnrollment(
     createdAt: new Date(),
   });
 
+  const { ObjectId } = await import("mongodb");
   await courseCollection.updateOne(
-    { _id: new ObjectId(courseId) },
+    { _id: ObjectId.createFromHexString(courseId) },
     { $inc: { enrollmentCount: 1 } }
   );
 
@@ -33,7 +34,8 @@ export async function createEnrollment(
 }
 
 export async function getEnrollmentsByStudent(email: string) {
-  return enrollmentCollection
+  const col = (await getDB()).collection<Enrollment>("enrollments");
+  return col
     .find({ studentEmail: email })
     .sort({ createdAt: -1 })
     .toArray();
@@ -44,8 +46,9 @@ export async function updateEnrollmentProgress(
   studentEmail: string,
   progress: number
 ) {
+  const { ObjectId } = await import("mongodb");
   const enrollment = await enrollmentCollection.findOne({
-    _id: new ObjectId(enrollmentId),
+    _id: ObjectId.createFromHexString(enrollmentId),
   });
   if (!enrollment) return { status: "NOT_FOUND" as const };
   if (enrollment.studentEmail !== studentEmail)
@@ -54,7 +57,7 @@ export async function updateEnrollmentProgress(
   const clamped = Math.max(0, Math.min(100, Number(progress)));
 
   const result = await enrollmentCollection.updateOne(
-    { _id: new ObjectId(enrollmentId) },
+    { _id: ObjectId.createFromHexString(enrollmentId) },
     {
       $set: {
         progress: clamped,
