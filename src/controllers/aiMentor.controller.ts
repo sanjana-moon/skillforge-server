@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
-import * as MentorService from "../services/aiMentor.service";
-import { param } from "../utils/param";
+import * as MentorService from "../services/aiMentor.service.js";
+import { param } from "../utils/param.js";
 
 export async function getSessions(req: Request, res: Response) {
   try {

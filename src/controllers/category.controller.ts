@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import * as CourseService from "../services/course.service";
+import * as CourseService from "../services/course.service.js";
 
 export async function getCategories(req: Request, res: Response) {
   try {

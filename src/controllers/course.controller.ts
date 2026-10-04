@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
-import * as CourseService from "../services/course.service";
-import { param } from "../utils/param";
-import type { Course } from "../types/models";
+import * as CourseService from "../services/course.service.js";
+import { param } from "../utils/param.js";
+import type { Course } from "../types/models.js";
 
 export async function getCourses(req: Request, res: Response) {
   try {

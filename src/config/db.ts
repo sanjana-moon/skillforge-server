@@ -1,12 +1,6 @@
 import { MongoClient, ServerApiVersion, Collection } from "mongodb";
 import { env } from "./env.js";
-import type {
-  Course,
-  Enrollment,
-  Payment,
-  AppUser,
-  MentorSession,
-} from "../types/models";
+import type { Course, Enrollment, Payment, AppUser, MentorSession } from "../types/models.js";
 
 const client = new MongoClient(env.MONGO_URI, {
   serverApi: {

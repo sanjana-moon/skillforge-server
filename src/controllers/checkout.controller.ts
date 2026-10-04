@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import * as PaymentService from "../services/payment.service";
+import * as PaymentService from "../services/payment.service.js";
 
 export async function checkout(req: Request, res: Response) {
   try {

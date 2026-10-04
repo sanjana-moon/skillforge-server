@@ -1,9 +1,9 @@
 import type { Request, Response } from "express";
 import { ObjectId } from "mongodb";
 import { courseCollection, enrollmentCollection } from "../config/db.js";
-import * as UserService from "../services/user.service";
-import * as StatsService from "../services/stats.service";
-import type { ApprovalStatus, UserRole } from "../types/models";
+import * as UserService from "../services/user.service.js";
+import * as StatsService from "../services/stats.service.js";
+import type { ApprovalStatus, UserRole } from "../types/models.js";
 
 function param(value: string | string[] | undefined): string {
   if (Array.isArray(value)) return value[0] ?? "";
