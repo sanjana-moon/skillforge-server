@@ -1,6 +1,6 @@
 import { ObjectId } from "mongodb";
 import { courseCollection, enrollmentCollection, usersCollection } from "../config/db.js";
-import type { Course, PublishStatus } from "../types/models";
+import type { Course, PublishStatus } from "../types/models.js";
 
 interface ListCoursesParams {
   search?: string;

@@ -1,5 +1,5 @@
 import { usersCollection, courseCollection, enrollmentCollection, mentorSessionCollection } from "../config/db.js";
-import type { AppUser } from "../types/models";
+import type { AppUser } from "../types/models.js";
 
 export async function getProfile(email: string) {
   return usersCollection.findOne({ email });
