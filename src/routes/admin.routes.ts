@@ -1,7 +1,7 @@
 import { Router } from "express";
-import * as AdminController from "../controllers/admin.controller";
-import { verifyToken } from "../middleware/verifyToken";
-import { requireRole } from "../middleware/requireRole";
+import * as AdminController from "../controllers/admin.controller.js";
+import { verifyToken } from "../middleware/verifyToken.js";
+import { requireRole } from "../middleware/requireRole.js";
 
 const router = Router();
 

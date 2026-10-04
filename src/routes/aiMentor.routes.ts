@@ -1,6 +1,6 @@
 import { Router } from "express";
-import * as MentorController from "../controllers/aiMentor.controller";
-import { verifyToken } from "../middleware/verifyToken";
+import * as MentorController from "../controllers/aiMentor.controller.js";
+import { verifyToken } from "../middleware/verifyToken.js";
 
 const router = Router();
 

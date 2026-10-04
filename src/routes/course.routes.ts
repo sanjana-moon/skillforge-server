@@ -1,8 +1,8 @@
 import { Router } from "express";
-import * as CourseController from "../controllers/course.controller";
-import { verifyToken } from "../middleware/verifyToken";
-import { requireRole } from "../middleware/requireRole";
-import { requireSelf } from "../middleware/requireSelf";
+import * as CourseController from "../controllers/course.controller.js";
+import { verifyToken } from "../middleware/verifyToken.js";
+import { requireRole } from "../middleware/requireRole.js";
+import { requireSelf } from "../middleware/requireSelf.js";
 
 const router = Router();
 

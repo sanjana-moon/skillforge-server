@@ -1,6 +1,6 @@
 import { Router } from "express";
-import * as ProfileController from "../controllers/profile.controller";
-import { verifyToken } from "../middleware/verifyToken";
+import * as ProfileController from "../controllers/profile.controller.js";
+import { verifyToken } from "../middleware/verifyToken.js";
 
 const router = Router();
 
