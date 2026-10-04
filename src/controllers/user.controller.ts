@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
-import * as UserService from "../services/user.service";
-import type { UserRole } from "../types/models";
+import * as UserService from "../services/user.service.js";
+import type { UserRole } from "../types/models.js";
 
 export async function createUser(req: Request, res: Response) {
   try {

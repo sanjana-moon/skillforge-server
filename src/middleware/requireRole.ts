@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { usersCollection } from "../config/db.js";
-import type { UserRole } from "../types/models";
+import type { UserRole } from "../types/models.js";
 
 export function requireRole(...roles: UserRole[]) {
   return async (req: Request, res: Response, next: NextFunction) => {

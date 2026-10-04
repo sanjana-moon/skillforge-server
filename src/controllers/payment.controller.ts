@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
-import * as PaymentService from "../services/payment.service";
-import { param } from "../utils/param";
+import * as PaymentService from "../services/payment.service.js";
+import { param } from "../utils/param.js";
 
 export async function getStudentPayments(req: Request, res: Response) {
   try {

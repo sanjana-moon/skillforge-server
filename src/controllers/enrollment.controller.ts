@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
-import * as EnrollmentService from "../services/enrollment.service";
-import { param } from "../utils/param";
+import * as EnrollmentService from "../services/enrollment.service.js";
+import { param } from "../utils/param.js";
 
 export async function createEnrollment(req: Request, res: Response) {
   try {

@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
-import * as StatsService from "../services/stats.service";
-import { param } from "../utils/param";
+import * as StatsService from "../services/stats.service.js";
+import { param } from "../utils/param.js";
 
 export async function getStats(req: Request, res: Response) {
   try {

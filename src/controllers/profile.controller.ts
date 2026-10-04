@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import * as ProfileService from "../services/profile.service";
+import * as ProfileService from "../services/profile.service.js";
 
 export async function getProfile(req: Request, res: Response) {
   try {
