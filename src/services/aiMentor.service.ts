@@ -1,7 +1,7 @@
 import { ObjectId } from "mongodb";
 import { GoogleGenAI } from "@google/genai";
-import { env } from "../config/env";
-import { mentorSessionCollection } from "../config/db";
+import { env } from "../config/env.js";
+import { mentorSessionCollection } from "../config/db.js";
 import type { MentorMessage } from "../types/models";
 
 const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });

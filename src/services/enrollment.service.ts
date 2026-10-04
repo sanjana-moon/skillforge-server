@@ -1,5 +1,5 @@
 import { ObjectId } from "mongodb";
-import { courseCollection, enrollmentCollection, usersCollection } from "../config/db";
+import { courseCollection, enrollmentCollection, usersCollection } from "../config/db.js";
 
 export async function createEnrollment(
   courseId: string,

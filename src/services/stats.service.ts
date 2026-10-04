@@ -1,4 +1,4 @@
-import { courseCollection, enrollmentCollection } from "../config/db";
+import { courseCollection, enrollmentCollection } from "../config/db.js";
 
 export async function getInstructorStats(email: string) {
   const courses = await courseCollection

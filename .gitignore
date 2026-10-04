@@ -1,3 +1,4 @@
 .env
 .vercel
 dist
+.env*.local

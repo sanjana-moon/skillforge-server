@@ -1,5 +1,5 @@
 import { ObjectId } from "mongodb";
-import { courseCollection, enrollmentCollection } from "../config/db";
+import { courseCollection, enrollmentCollection, usersCollection } from "../config/db.js";
 import type { Course, PublishStatus } from "../types/models";
 
 interface ListCoursesParams {
@@ -163,9 +163,14 @@ export async function createCourse(
   data: Partial<Course>,
   instructorEmail: string
 ) {
+  const instructor = await usersCollection.findOne({
+    email: instructorEmail.toLowerCase(),
+  });
+
   return courseCollection.insertOne({
     ...(data as Course),
     instructorEmail,
+    instructorName: instructor?.name || instructorEmail.split("@")[0],
     price: Number(data.price),
     approvalStatus: "pending",
     publishStatus: "unpublished",

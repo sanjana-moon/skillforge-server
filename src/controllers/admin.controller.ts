@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { ObjectId } from "mongodb";
-import { courseCollection, enrollmentCollection } from "../config/db";
+import { courseCollection, enrollmentCollection } from "../config/db.js";
 import * as UserService from "../services/user.service";
 import * as StatsService from "../services/stats.service";
 import type { ApprovalStatus, UserRole } from "../types/models";

@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { jwtVerify } from "jose";
-import { JWKS } from "../config/jwks";
-import { usersCollection } from "../config/db";
+import { JWKS } from "../config/jwks.js";
+import { usersCollection } from "../config/db.js";
 
 export async function verifyToken(
   req: Request,

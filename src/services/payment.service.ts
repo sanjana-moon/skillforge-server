@@ -4,7 +4,7 @@ import {
   enrollmentCollection,
   paymentCollection,
   usersCollection,
-} from "../config/db";
+} from "../config/db.js";
 
 export async function processCheckout(
   studentEmail: string,
@@ -57,4 +57,11 @@ export async function processCheckout(
   });
 
   return { status: "OK" as const, enrollment: enrollmentResult };
+}
+
+export async function getPaymentsByStudent(email: string) {
+  return paymentCollection
+    .find({ studentEmail: email })
+    .sort({ paidAt: -1 })
+    .toArray();
 }

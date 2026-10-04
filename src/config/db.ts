@@ -1,5 +1,5 @@
 import { MongoClient, ServerApiVersion, Collection } from "mongodb";
-import { env } from "./env";
+import { env } from "./env.js";
 import type {
   Course,
   Enrollment,

@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
-import { usersCollection } from "../config/db";
+import { usersCollection } from "../config/db.js";
 import type { UserRole } from "../types/models";
 
 export function requireRole(...roles: UserRole[]) {

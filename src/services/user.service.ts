@@ -1,5 +1,5 @@
 import { ObjectId } from "mongodb";
-import { usersCollection } from "../config/db";
+import { usersCollection } from "../config/db.js";
 import type { AppUser, UserRole } from "../types/models";
 
 export async function findUserByEmail(email: string) {

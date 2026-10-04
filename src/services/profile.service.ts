@@ -1,4 +1,4 @@
-import { usersCollection, courseCollection, enrollmentCollection, mentorSessionCollection } from "../config/db";
+import { usersCollection, courseCollection, enrollmentCollection, mentorSessionCollection } from "../config/db.js";
 import type { AppUser } from "../types/models";
 
 export async function getProfile(email: string) {
