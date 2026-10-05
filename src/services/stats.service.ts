@@ -2,18 +2,23 @@ import {
   courseCollection,
   enrollmentCollection,
   usersCollection,
+  getDB,
 } from "../config/db.js";
 import type { Course, Enrollment } from "../types/models.js";
 
 export async function getInstructorStats(email: string) {
-  const courses = (await courseCollection
+  const courseCol = (await getDB()).collection<Course>("courses");
+
+  const courses = (await courseCol
     .find({ instructorEmail: email }, { projection: { content: 0 } })
     .toArray()) as Course[];
 
   const totalCourses = courses.length;
-  const courseIds = courses.map((c: Course) => c._id!.toString());
+  const courseIds = courses.map((c) => c._id!.toString());
 
-  const enrollments = (await enrollmentCollection
+  const enrollCol = (await getDB()).collection<Enrollment>("enrollments");
+
+  const enrollments = (await enrollCol
     .find({ courseId: { $in: courseIds } })
     .toArray()) as Enrollment[];
 
@@ -21,17 +26,16 @@ export async function getInstructorStats(email: string) {
 
   const popularCourses = courses
     .sort(
-      (a: Course, b: Course) =>
-        (b.enrollmentCount || 0) - (a.enrollmentCount || 0)
+      (a, b) => (b.enrollmentCount || 0) - (a.enrollmentCount || 0)
     )
     .slice(0, 5)
-    .map((c: Course) => ({
+    .map((c) => ({
       title: c.title,
       enrollments: c.enrollmentCount || 0,
     }));
 
   const monthlyEnrollments: Record<string, number> = {};
-  enrollments.forEach((e: Enrollment) => {
+  enrollments.forEach((e) => {
     const date = new Date(e.createdAt);
     const month = date.toLocaleString("default", { month: "short" });
     monthlyEnrollments[month] = (monthlyEnrollments[month] || 0) + 1;
@@ -45,21 +49,23 @@ export async function getInstructorStats(email: string) {
 }
 
 export async function getStudentStats(email: string) {
-  const enrollments = (await enrollmentCollection
+  const enrollCol = (await getDB()).collection<Enrollment>("enrollments");
+
+  const enrollments = (await enrollCol
     .find({ studentEmail: email })
     .toArray()) as Enrollment[];
 
   const enrolledCourses = enrollments.length;
   const completedCourses = enrollments.filter(
-    (e: Enrollment) => e.progress === 100
+    (e) => e.progress === 100
   ).length;
   const inProgress = enrollments.filter(
-    (e: Enrollment) => e.progress > 0 && e.progress < 100
+    (e) => e.progress > 0 && e.progress < 100
   ).length;
 
   const recentCourses = enrollments
     .sort(
-      (a: Enrollment, b: Enrollment) =>
+      (a, b) =>
         new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     )
     .slice(0, 5);
@@ -68,12 +74,15 @@ export async function getStudentStats(email: string) {
 }
 
 export async function getAdminDashboard() {
+  const courseCol = (await getDB()).collection<Course>("courses");
+  const enrollCol = (await getDB()).collection<Enrollment>("enrollments");
+
   const [totalUsers, totalCourses, totalEnrollments, categoryStats] =
     await Promise.all([
       usersCollection.countDocuments({ role: { $ne: "admin" } }),
-      courseCollection.countDocuments(),
-      enrollmentCollection.countDocuments(),
-      courseCollection
+      courseCol.countDocuments(),
+      enrollCol.countDocuments(),
+      courseCol
         .aggregate([{ $group: { _id: "$category", value: { $sum: 1 } } }])
         .toArray(),
     ]);
